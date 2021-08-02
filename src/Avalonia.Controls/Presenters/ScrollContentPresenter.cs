@@ -3,9 +3,13 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using Animation = Avalonia.Animation.Animation;
+using Clock = Avalonia.Animation.Clock;
+using Avalonia.Animation.Easings;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.VisualTree;
+using Avalonia.Threading;
 
 #nullable enable
 
@@ -53,6 +57,36 @@ namespace Avalonia.Controls.Presenters
                 (o, v) => o.Offset = v);
 
         /// <summary>
+        /// Defines the <see cref="AnimationOffset"/> property.
+        /// </summary>
+        public static readonly StyledProperty<Vector> AnimationOffsetProperty =
+            AvaloniaProperty.Register<ScrollContentPresenter, Vector>(nameof(AnimationOffset));
+        
+        /*
+        /// <summary>
+        /// Defines the <see cref="SmoothScrollEasing"/> property.
+        /// </summary>
+        public static readonly StyledProperty<Easing> SmoothScrollEasingProperty =
+            AvaloniaProperty.Register<ScrollViewer, Easing>(nameof(SmoothScrollEasing));
+        /*public static readonly DirectProperty<ScrollContentPresenter, Easing> SmoothScrollEasingProperty =
+            AvaloniaProperty.RegisterDirect<ScrollContentPresenter, Easing>(
+                nameof(SmoothScrollEasing),
+                o => o.SmoothScrollEasing,
+                (o, v) => o.SmoothScrollEasing = v);*/
+        
+        /*
+        /// <summary>
+        /// Defines the <see cref="SmoothScrollDuration"/> property.
+        /// </summary>
+        public static readonly StyledProperty<TimeSpan> SmoothScrollDurationProperty =
+            AvaloniaProperty.Register<ScrollViewer, TimeSpan>(nameof(SmoothScrollDuration));
+        /*public static readonly DirectProperty<ScrollContentPresenter, TimeSpan> SmoothScrollDurationProperty =
+            AvaloniaProperty.RegisterDirect<ScrollContentPresenter, TimeSpan>(
+                nameof(SmoothScrollDuration),
+                o => o.SmoothScrollDuration,
+                (o, v) => o.SmoothScrollDuration = v);*/
+
+        /// <summary>
         /// Defines the <see cref="Viewport"/> property.
         /// </summary>
         public static readonly DirectProperty<ScrollContentPresenter, Size> ViewportProperty =
@@ -68,6 +102,20 @@ namespace Avalonia.Controls.Presenters
         private bool _arranging;
         private Size _extent;
         private Vector _offset;
+        //private Easing _smoothScrollEasing = new BounceEaseInOut();
+        //private TimeSpan _smoothScrollDuration = TimeSpan.FromMilliseconds(0);
+        //private bool _usesSmoothScrolling = true;
+        private bool _shouldAnimateOffset = false;
+        private DispatcherTimer _smoothScrollTimer; //Timer(1);
+        private bool _smoothScrollTimerStarted = false;
+        private double _animStartOffsetX = 0;
+        private double _animStartOffsetY = 0;
+        private double _offsetX = 0;
+        private double _offsetY = 0;
+        private double _animDuration = 0;
+        private double _animTimeRemaining = 0;
+
+        private IEasing _currentEasing;
         private IDisposable? _logicalScrollSubscription;
         private Size _viewport;
         private Dictionary<int, Vector>? _activeLogicalGestureScrolls;
@@ -83,6 +131,12 @@ namespace Avalonia.Controls.Presenters
         {
             ClipToBoundsProperty.OverrideDefaultValue(typeof(ScrollContentPresenter), true);
             ChildProperty.Changed.AddClassHandler<ScrollContentPresenter>((x, e) => x.ChildChanged(e));
+            OffsetProperty.Changed.AddClassHandler<ScrollContentPresenter>((x, e) => x.OffsetChanged(e));
+
+            AffectsArrange<ScrollContentPresenter>(AnimationOffsetProperty);
+
+            //SmoothScrollEasingProperty.Changed.AddClassHandler<ScrollContentPresenter>((x, e) => x.SmoothScrollPropertiesChanged());
+            //SmoothScrollDurationProperty.Changed.AddClassHandler<ScrollContentPresenter>((x, e) => x.SmoothScrollPropertiesChanged());
         }
 
         /// <summary>
@@ -94,6 +148,9 @@ namespace Avalonia.Controls.Presenters
             AddHandler(Gestures.ScrollGestureEvent, OnScrollGesture);
 
             this.GetObservable(ChildProperty).Subscribe(UpdateScrollableSubscription);
+            
+            _smoothScrollTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(1), DispatcherPriority.Render, SmoothScrollTimer_Elapsed);
+            //SmoothScrollPropertiesChanged();
         }
 
         /// <summary>
@@ -124,12 +181,72 @@ namespace Avalonia.Controls.Presenters
         }
 
         /// <summary>
-        /// Gets or sets the current scroll offset.
+        /// Gets or sets the current logical scroll offset.
         /// </summary>
         public Vector Offset
         {
             get { return _offset; }
             set { SetAndRaise(OffsetProperty, ref _offset, ScrollViewer.CoerceOffset(Extent, Viewport, value)); }
+        }
+
+        /// <summary>
+        /// Gets or sets the current visible scroll offset.
+        /// </summary>
+        public Vector AnimationOffset
+        {
+            get => GetValue(AnimationOffsetProperty);
+            set => SetValue(AnimationOffsetProperty, value);
+        }
+
+        /*
+        /// <summary>
+        /// Gets or sets the easing function to be used when scrolling.
+        /// </summary>
+        public Easing SmoothScrollEasing
+        {
+            get => GetValue(SmoothScrollEasingProperty);
+            set => SetValue(SmoothScrollEasingProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the current smooth-scroll duration.
+        /// </summary>
+        public TimeSpan SmoothScrollDuration
+        {
+            get => GetValue(SmoothScrollDurationProperty);
+            set => SetValue(SmoothScrollDurationProperty, value);
+        }*/
+
+        
+        private bool ShouldUseSmoothScrolling(out IEasing easing, out TimeSpan duration)
+        {
+            if (TemplatedParent is ScrollViewer scrollV)
+            {
+                easing = scrollV.SmoothScrollEasing;
+                duration = scrollV.SmoothScrollDuration;
+                return (easing != null) && (duration != null) && (duration.TotalMilliseconds > 0);
+            }
+            else
+            {
+                easing = null;
+                duration = TimeSpan.Zero;
+                return false;
+            }
+        }
+        private bool UsesSmoothScrolling
+        {
+            get => ShouldUseSmoothScrolling(out IEasing _, out TimeSpan __);
+        }
+
+        private Vector _currentFromOffset
+        {
+            get
+            {
+                if (UsesSmoothScrolling) //_usesSmoothScrolling)
+                    return AnimationOffset;
+                else
+                    return Offset;
+            }
         }
 
         /// <summary>
@@ -180,7 +297,7 @@ namespace Avalonia.Controls.Presenters
             }
 
             var rect = targetRect.TransformToAABB(transform.Value);
-            var offset = Offset;
+            var offset = _currentFromOffset;
             var result = false;
 
             if (rect.Bottom > offset.Y + Viewport.Height)
@@ -290,7 +407,8 @@ namespace Avalonia.Controls.Presenters
                 return default;
             }
 
-            var isAnchoring = Offset.X >= EdgeDetectionTolerance || Offset.Y >= EdgeDetectionTolerance;
+            var currentFromOffset = _currentFromOffset;
+            var isAnchoring = currentFromOffset.X >= EdgeDetectionTolerance || currentFromOffset.Y >= EdgeDetectionTolerance;
 
             if (isAnchoring)
             {
@@ -298,14 +416,14 @@ namespace Avalonia.Controls.Presenters
                 EnsureAnchorElementSelection();
 
                 // Do the arrange.
-                ArrangeOverrideImpl(size, -Offset);
+                ArrangeOverrideImpl(size, -currentFromOffset);
 
                 // If the anchor moved during the arrange, we need to adjust the offset and do another arrange.
                 var anchorShift = TrackAnchor();
 
                 if (anchorShift != default)
                 {
-                    var newOffset = Offset + anchorShift;
+                    var newOffset = currentFromOffset + anchorShift;
                     var newExtent = Extent;
                     var maxOffset = new Vector(Extent.Width - Viewport.Width, Extent.Height - Viewport.Height);
 
@@ -331,12 +449,12 @@ namespace Avalonia.Controls.Presenters
                         _arranging = false;
                     }
 
-                    ArrangeOverrideImpl(size, -Offset);
+                    ArrangeOverrideImpl(size, -currentFromOffset);
                 }
             }
             else
             {
-                ArrangeOverrideImpl(size, -Offset);
+                ArrangeOverrideImpl(size, -currentFromOffset);
             }
 
             Viewport = finalSize;
@@ -415,11 +533,13 @@ namespace Avalonia.Controls.Presenters
         {
             if (Extent.Height > Viewport.Height || Extent.Width > Viewport.Width)
             {
+                _shouldAnimateOffset = true;
                 var scrollable = Child as ILogicalScrollable;
                 bool isLogical = scrollable?.IsLogicalScrollEnabled == true;
-
-                double x = Offset.X;
-                double y = Offset.Y;
+                
+                var currentFromOffset = Offset;
+                double x = currentFromOffset.X;
+                double y = currentFromOffset.Y;
 
                 if (Extent.Height > Viewport.Height)
                 {
@@ -438,6 +558,7 @@ namespace Avalonia.Controls.Presenters
                 }
 
                 Offset = new Vector(x, y);
+                _shouldAnimateOffset = false;
                 e.Handled = true;
             }
         }
@@ -464,6 +585,103 @@ namespace Avalonia.Controls.Presenters
             if (e.OldValue != null)
             {
                 Offset = default(Vector);
+            }
+        }
+
+        private void OffsetChanged(AvaloniaPropertyChangedEventArgs e)
+        {
+            var oldOffset = (Vector?)e.OldValue;
+            var newOffset = (Vector?)e.NewValue;
+            if (ShouldUseSmoothScrolling(out IEasing ease, out TimeSpan dur)) //TemplatedParent is ScrollViewer scrollV) //_usesSmoothScrolling && _shouldAnimateOffset)
+            {
+                StartAnimatingOffset(oldOffset, newOffset, ease, dur); //scrollV.SmoothScrollDuration, scrollV.SmoothScrollEasing);
+            }
+            else
+            {
+                AnimationOffset = newOffset.GetValueOrDefault();
+            }
+
+            //string output = "SmoothScrollDuration: " + SmoothScrollDuration + "\n\tSmoothScrollEasing: " + SmoothScrollEasing + "\nTemplatedParent.SmoothScrollDuration: ";
+            /*if (TemplatedParent != null)
+                Console.WriteLine((TemplatedParent as ScrollViewer).SmoothScrollDuration + "\n\tTemplatedParent.SmoothScrollEasing: " + (TemplatedParent as ScrollViewer).SmoothScrollEasing);
+            else
+                Console.WriteLine("No parent!");*/
+        }
+
+        /*
+        DONE: Clicking on ScrollBar track teleports, rather than moving smoothly
+        TODO: ScrollBar thumb should move smoothly when scrolling via wheel
+        */
+        private void StartAnimatingOffset(Vector? oldOffset, Vector? newOffset, IEasing scrollEasing, TimeSpan scrollDuration)
+        {
+            var newOff = newOffset.GetValueOrDefault();
+            
+            if (_smoothScrollTimerStarted)
+            {
+                _animStartOffsetX = _offsetX;
+                _animStartOffsetY = _offsetY;
+            }
+            
+            _offsetX = newOff.X;
+            _offsetY = newOff.Y;
+
+            _animDuration = scrollDuration.TotalMilliseconds;
+            _animTimeRemaining = _animDuration;
+            
+
+            if (!_smoothScrollTimerStarted)
+            {
+                var oldOff = oldOffset.GetValueOrDefault();
+
+                _animStartOffsetX = oldOff.X;
+                _animStartOffsetY = oldOff.Y;
+
+                _currentEasing = scrollEasing;
+                _smoothScrollTimerStarted = true;
+                _smoothScrollTimer.Start();
+            }
+        }
+
+        private void SmoothScrollTimer_Elapsed(object sender, EventArgs e)
+        {   
+            double totalDistanceX = _offsetX - _animStartOffsetX;
+            double totalDistanceY = _offsetY - _animStartOffsetY;
+            
+            double percentage = 1 - Math.Min(Math.Max(0, _animTimeRemaining / _animDuration), 1);
+            double easedPercentage = _currentEasing.Ease(percentage);
+
+            double currentX = _animStartOffsetX + (totalDistanceX * easedPercentage);
+            double currentY = _animStartOffsetY + (totalDistanceY * easedPercentage);
+            _animTimeRemaining--;
+            //Console.WriteLine("_animTimeRemaining: " + _animTimeRemaining);
+            //Console.WriteLine("percentage: " + percentage + "; \teasedPercentage: " + easedPercentage + "; \tcurrent: " + currentX + ", " + currentY + "\n\t\t");
+            
+            AnimationOffset = new Vector(currentX, currentY);
+            
+            if (_animTimeRemaining <= 0)
+            {
+                //Console.WriteLine("Stopping...");
+                _smoothScrollTimerStarted = false;
+                _smoothScrollTimer.Stop();
+            }
+        }
+
+        /*private void SmoothScrollPropertiesChanged()
+        {
+            bool hasDuration = SmoothScrollDuration != null;
+            _usesSmoothScrolling = (SmoothScrollEasing != null) && hasDuration && (SmoothScrollDuration.TotalMilliseconds > 0);
+        }*/
+
+        static string _animPseudoclass = ":animating";
+        bool _hasAnimPseudoClass = false;
+        void SetAnimPseudoclass(bool add)
+        {
+            if (_hasAnimPseudoClass != add)
+            {
+                if (add)
+                    PseudoClasses.Add(_animPseudoclass);
+                else
+                    PseudoClasses.Remove(_animPseudoclass);
             }
         }
 
@@ -511,8 +729,8 @@ namespace Avalonia.Controls.Presenters
             else if (scrollable.IsLogicalScrollEnabled)
             {
                 Viewport = scrollable.Viewport;
-                Offset = scrollable.Offset;
                 Extent = scrollable.Extent;
+                Offset = scrollable.Offset;
             }
         }
 
@@ -567,7 +785,7 @@ namespace Avalonia.Controls.Presenters
                 // child control and then apply Offset rather than translating directly to this
                 // control.
                 var thisBounds = new Rect(Bounds.Size);
-                bounds = new Rect(childBounds.Position - Offset, childBounds.Size);
+                bounds = new Rect(childBounds.Position - _currentFromOffset, childBounds.Size);
                 return bounds.Intersects(thisBounds);
             }
 

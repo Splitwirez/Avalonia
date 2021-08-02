@@ -36,5 +36,7 @@
     <converters:CornerRadiusFilterConverter x:Key="RightCornerRadiusFilterConverter" Filter="TopRight, BottomRight"/>
     <converters:CornerRadiusFilterConverter x:Key="BottomCornerRadiusFilterConverter" Filter="BottomLeft, BottomRight"/>
     <converters:CornerRadiusFilterConverter x:Key="LeftCornerRadiusFilterConverter" Filter="TopLeft, BottomLeft"/>
+
+    <QuinticEaseOut x:Key="SmoothScrollEase"/>
   </Style.Resources>
 </Style>

@@ -75,5 +75,7 @@
 
         <sys:Double x:Key="IconElementThemeHeight">20</sys:Double>
         <sys:Double x:Key="IconElementThemeWidth">20</sys:Double>
+
+        <BounceEaseIn x:Key="ScrollEase"/>
     </Style.Resources>
 </Style>

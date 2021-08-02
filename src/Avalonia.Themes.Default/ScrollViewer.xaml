@@ -4,6 +4,8 @@
   <Style Selector="ScrollViewer">
     <Setter Property="Background"
             Value="Transparent" />
+    <Setter Property="SmoothScrollDuration" Value="0:0:0.5" />
+    <Setter Property="SmoothScrollEasing" Value="{DynamicResource ScrollEase}"/>
     <Setter Property="Template">
       <ControlTemplate>
         <Grid ColumnDefinitions="*,Auto" RowDefinitions="*,Auto">

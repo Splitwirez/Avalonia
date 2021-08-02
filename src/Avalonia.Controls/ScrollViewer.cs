@@ -1,5 +1,6 @@
 using System;
 using System.Reactive.Linq;
+using Avalonia.Animation.Easings;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
@@ -52,6 +53,31 @@ namespace Avalonia.Controls
                 nameof(Offset),
                 o => o.Offset,
                 (o, v) => o.Offset = v);
+        
+        //static IEasing DefaultSmoothScrollEasing() => new CircularEaseIn();
+        /// <summary>
+        /// Defines the <see cref="SmoothScrollEasing"/> property.
+        /// </summary>
+        public static readonly StyledProperty<IEasing> SmoothScrollEasingProperty =
+            AvaloniaProperty.Register<ScrollViewer, IEasing>(nameof(SmoothScrollEasing));
+        /*public static readonly DirectProperty<ScrollViewer, Easing> SmoothScrollEasingProperty =
+            AvaloniaProperty.RegisterDirect<ScrollViewer, Easing>(
+                nameof(SmoothScrollEasing),
+                o => o.SmoothScrollEasing,
+                (o, v) => o.SmoothScrollEasing = v);*/
+        
+        
+        //static TimeSpan DefaultSmoothScrollDuration() => TimeSpan.FromMilliseconds(500);
+        /// <summary>
+        /// Defines the <see cref="SmoothScrollDuration"/> property.
+        /// </summary>
+        public static readonly StyledProperty<TimeSpan> SmoothScrollDurationProperty =
+            AvaloniaProperty.Register<ScrollViewer, TimeSpan>(nameof(SmoothScrollDuration));
+        /*public static readonly DirectProperty<ScrollViewer, TimeSpan> SmoothScrollDurationProperty =
+            AvaloniaProperty.RegisterDirect<ScrollViewer, TimeSpan>(
+                nameof(SmoothScrollDuration),
+                o => o.SmoothScrollDuration,
+                (o, v) => o.SmoothScrollDuration = v);*/
 
         /// <summary>
         /// Defines the <see cref="Viewport"/> property.
@@ -176,10 +202,8 @@ namespace Avalonia.Controls
         /// <summary>
         /// Defines the <see cref="AllowAutoHide"/> property.
         /// </summary>
-        public static readonly AttachedProperty<bool> AllowAutoHideProperty =
-            AvaloniaProperty.RegisterAttached<ScrollViewer, Control, bool>(
-                nameof(AllowAutoHide),
-                true);
+        public static readonly StyledProperty<bool> AllowAutoHideProperty =
+            ScrollBar.AllowAutoHideProperty.AddOwner<ScrollViewer>();
 
         /// <summary>
         /// Defines the <see cref="ScrollChanged"/> event.
@@ -195,6 +219,8 @@ namespace Avalonia.Controls
         private ILogicalScrollable _logicalScrollable;
         private Size _extent;
         private Vector _offset;
+        //private Easing _smoothScrollEasing = new BounceEaseInOut();
+        //private TimeSpan _smoothScrollDuration = TimeSpan.FromMilliseconds(0);
         private Size _viewport;
         private Size _oldExtent;
         private Vector _oldOffset;
@@ -209,8 +235,17 @@ namespace Avalonia.Controls
         /// </summary>
         static ScrollViewer()
         {
-            HorizontalScrollBarVisibilityProperty.Changed.AddClassHandler<ScrollViewer, ScrollBarVisibility>((x, e) => x.ScrollBarVisibilityChanged(e));
-            VerticalScrollBarVisibilityProperty.Changed.AddClassHandler<ScrollViewer, ScrollBarVisibility>((x, e) => x.ScrollBarVisibilityChanged(e));
+            HorizontalScrollBarVisibilityProperty.Changed.AddClassHandler<ScrollViewer>((x, e) => x.ScrollBarVisibilityChanged(e));
+            VerticalScrollBarVisibilityProperty.Changed.AddClassHandler<ScrollViewer>((x, e) => x.ScrollBarVisibilityChanged(e));
+
+            AffectsMeasure<ScrollViewer>(SmoothScrollEasingProperty, SmoothScrollDurationProperty);
+            AffectsArrange<ScrollViewer>(SmoothScrollEasingProperty, SmoothScrollDurationProperty);
+            AffectsRender<ScrollViewer>(SmoothScrollEasingProperty, SmoothScrollDurationProperty);
+
+            SmoothScrollEasingProperty.Changed.AddClassHandler<ScrollViewer>((x, e) =>
+            {
+                Console.WriteLine($"ScrollViewer \'{x.Name}\':\n\tOld: {e.OldValue}\n\tNew: {e.NewValue}\n");
+            });
         }
 
         /// <summary>
@@ -266,6 +301,28 @@ namespace Avalonia.Controls
                     CalculatedPropertiesChanged();
                 }
             }
+        }
+
+        /// <summary>
+        /// Gets or sets the current scroll easing function.
+        /// </summary>
+        public IEasing SmoothScrollEasing
+        {
+            get => GetValue(SmoothScrollEasingProperty);
+            set => SetValue(SmoothScrollEasingProperty, value);
+            /*get { return _smoothScrollEasing; }
+            set { SetAndRaise<Easing>(SmoothScrollEasingProperty, ref _smoothScrollEasing, value); }*/
+        }
+
+        /// <summary>
+        /// Gets or sets the current smooth-scroll duration.
+        /// </summary>
+        public TimeSpan SmoothScrollDuration
+        {
+            get => GetValue(SmoothScrollDurationProperty);
+            set => SetValue(SmoothScrollDurationProperty, value);
+            /*get { return _smoothScrollDuration; }
+            set { SetAndRaise<TimeSpan>(SmoothScrollDurationProperty, ref _smoothScrollDuration, value); }*/
         }
 
         /// <summary>
@@ -529,26 +586,6 @@ namespace Avalonia.Controls
         }
 
         /// <summary>
-        /// Gets the value of the AllowAutoHideProperty attached property.
-        /// </summary>
-        /// <param name="control">The control to set the value on.</param>
-        /// <param name="value">The value of the property.</param>
-        public static void SetAllowAutoHide(Control control, bool value)
-        {
-            control.SetValue(AllowAutoHideProperty, value);
-        }
-
-        /// <summary>
-        /// Gets the value of the AllowAutoHideProperty attached property.
-        /// </summary>
-        /// <param name="control">The control to read the value from.</param>
-        /// <returns>The value of the property.</returns>
-        public static bool GetAllowAutoHide(Control control)
-        {
-            return control.GetValue(AllowAutoHideProperty);
-        }
-
-        /// <summary>
         /// Gets the value of the VerticalScrollBarVisibility attached property.
         /// </summary>
         /// <param name="control">The control to set the value on.</param>
@@ -626,10 +663,10 @@ namespace Avalonia.Controls
             CalculatedPropertiesChanged();
         }
 
-        private void ScrollBarVisibilityChanged(AvaloniaPropertyChangedEventArgs<ScrollBarVisibility> e)
+        private void ScrollBarVisibilityChanged(AvaloniaPropertyChangedEventArgs e)
         {
-            var wasEnabled = e.OldValue.GetValueOrDefault() != ScrollBarVisibility.Disabled;
-            var isEnabled = e.NewValue.GetValueOrDefault() != ScrollBarVisibility.Disabled;
+            var wasEnabled = !ScrollBarVisibility.Disabled.Equals(e.OldValue);
+            var isEnabled = !ScrollBarVisibility.Disabled.Equals(e.NewValue);
 
             if (wasEnabled != isEnabled)
             {
@@ -653,7 +690,7 @@ namespace Avalonia.Controls
         private void CalculatedPropertiesChanged()
         {
             // Pass old values of 0 here because we don't have the old values at this point,
-            // and it shouldn't matter as only the template uses these properties.
+            // and it shouldn't matter as only the template uses these properies.
             RaisePropertyChanged(HorizontalScrollBarMaximumProperty, 0, HorizontalScrollBarMaximum);
             RaisePropertyChanged(HorizontalScrollBarValueProperty, 0, HorizontalScrollBarValue);
             RaisePropertyChanged(HorizontalScrollBarViewportSizeProperty, 0, HorizontalScrollBarViewportSize);
